@@ -1,119 +1,127 @@
 import React, { useState, useEffect } from 'react';
-import NewsList from './NewsList';
-import Privacy from './Privacy';
+import { geocodeCity, fetchWeather } from './api';
+import WeatherCard from './WeatherCard';
 
 export default function App() {
-  const [q, setQ] = useState('');
-  const [language, setLanguage] = useState('en');
-  const [articles, setArticles] = useState([]);
-  const [page, setPage] = useState(1);
+  const [query, setQuery] = useState(localStorage.getItem('lastCity') || 'Paris');
+  const [results, setResults] = useState([]);
+  const [place, setPlace] = useState(null);
+  const [weather, setWeather] = useState(null);
+  const [daily, setDaily] = useState(null);
   const [loading, setLoading] = useState(false);
-  const [totalResults, setTotalResults] = useState(0);
-  const [showPrivacy, setShowPrivacy] = useState(false);
-  const pageSize = 12;
+  const [err, setErr] = useState('');
 
   useEffect(() => {
-    fetchNews();
+    // auto load last city on first render
+    if (localStorage.getItem('lastCity')) {
+      searchCity(localStorage.getItem('lastCity'));
+    }
     // eslint-disable-next-line
-  }, [page]);
+  }, []);
 
-  async function fetchNews(e) {
-    if (e) e.preventDefault();
+  async function searchCity(name) {
+    if (!name) return;
+    setErr('');
     setLoading(true);
+    setResults([]);
+    setPlace(null);
+    setWeather(null);
     try {
-      // Appelle le backend si disponible (proxy). Si pas de backend (Pages seulement) utilise un fallback RSS
-      const params = new URLSearchParams({
-        ...(q ? { q } : {}),
-        language,
-        page,
-        pageSize
-      });
-
-      // Tentative backend sur /api/news
-      const res = await fetch(`/api/news?${params.toString()}`);
-      if (res.ok) {
-        const data = await res.json();
-        if (data.articles) {
-          setArticles(data.articles);
-          setTotalResults(data.totalResults || 0);
-          setLoading(false);
-          return;
+      const res = await geocodeCity(name);
+      if (res.length === 0) {
+        setErr('Aucun résultat pour cette ville.');
+      } else {
+        setResults(res);
+        // si un seul résultat, sélectionner automatiquement
+        if (res.length === 1) {
+          selectPlace(res[0]);
         }
       }
-
-      // Fallback : utiliser Google News RSS via rss2json (public fallback)
-      const rssQuery = encodeURIComponent((q || 'education') + ' site:news');
-      const rssUrl = `https://news.google.com/rss/search?q=${rssQuery}&hl=en-US&gl=US&ceid=US:en`;
-      const rss2json = `https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(rssUrl)}`;
-      const r2 = await fetch(rss2json);
-      const rdata = await r2.json();
-      const items = (rdata.items || []).map(it => ({
-        source: { name: it.source || '' },
-        author: it.author || '',
-        title: it.title,
-        description: it.description,
-        url: it.link,
-        urlToImage: it.enclosure?.link || '',
-        publishedAt: it.pubDate,
-        content: ''
-      }));
-      setArticles(items);
-      setTotalResults(items.length);
-    } catch (err) {
-      console.error(err);
-      setArticles([]);
-      setTotalResults(0);
+    } catch (e) {
+      setErr('Erreur lors du géocodage.');
     } finally {
       setLoading(false);
     }
   }
 
-  function formatDate(dateStr) {
+  async function selectPlace(p) {
+    setPlace(p);
+    localStorage.setItem('lastCity', p.name);
+    setLoading(true);
+    setErr('');
     try {
-      const d = new Date(dateStr);
-      return new Intl.DateTimeFormat(language, { dateStyle: 'medium', timeStyle: 'short' }).format(d);
-    } catch {
-      return dateStr;
+      const data = await fetchWeather(p.latitude, p.longitude);
+      setWeather(data.current_weather || null);
+      setDaily(data.daily || null);
+    } catch (e) {
+      setErr('Erreur lors de la récupération météo.');
+    } finally {
+      setLoading(false);
     }
   }
 
   return (
-    <div className="container" role="main">
+    <div className="app">
       <header>
-        <h1>Edu News — actualités mondiales sur l'éducation</h1>
-        <p>Filtre par langue, mot-clé et page. Le site utilise un backend si disponible ; sinon un fallback RSS est tenté.</p>
+        <h1>Weather Dashboard</h1>
+        <p>Recherche la météo par ville (Open‑Meteo, API publique)</p>
       </header>
 
-      <form className="controls" onSubmit={fetchNews} aria-label="Formulaire de recherche">
-        <input aria-label="mot-clé" placeholder="Mot-clé (ex: policy, school, éducation...)" value={q} onChange={(e)=>setQ(e.target.value)} />
-        <select aria-label="Langue" value={language} onChange={(e)=>setLanguage(e.target.value)}>
-          <option value="en">English</option>
-          <option value="fr">Français</option>
-          <option value="es">Español</option>
-          <option value="de">Deutsch</option>
-          <option value="ru">Русский</option>
-          <option value="ar">العربية</option>
-          <option value="zh">中文</option>
-          <option value="all">Toutes les langues</option>
-        </select>
-        <button type="submit" aria-label="Rechercher">Rechercher</button>
-      </form>
-
       <main>
-        {loading ? <p role="status">Chargement…</p> : <NewsList articles={articles} formatDate={formatDate} />}
-        <div className="pagination" role="navigation" aria-label="Pagination">
-          <button onClick={() => setPage(p => Math.max(1, p-1))} disabled={page<=1} aria-label="Page précédente">← Préc</button>
-          <span>Page {page} — {totalResults} résultats</span>
-          <button onClick={() => setPage(p => p+1)} disabled={articles.length < pageSize} aria-label="Page suivante">Suiv →</button>
-        </div>
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            searchCity(query);
+          }}
+          className="search-form"
+          role="search"
+          aria-label="Recherche ville"
+        >
+          <input
+            aria-label="Ville"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Ex: Paris, New York, Dakar..."
+          />
+          <button type="submit" disabled={loading}>Chercher</button>
+          <button
+            type="button"
+            onClick={() => {
+              setQuery('');
+              setResults([]);
+              setPlace(null);
+              setWeather(null);
+              setDaily(null);
+            }}
+            className="clear"
+          >
+            Réinitialiser
+          </button>
+        </form>
+
+        {loading && <p role="status">Chargement…</p>}
+        {err && <p className="error" role="alert">{err}</p>}
+
+        {results && results.length > 1 && (
+          <div className="results" role="list" aria-label="Résultats de géocodage">
+            <h3>Choisis une localisation</h3>
+            <ul>
+              {results.map((r) => (
+                <li key={`${r.latitude}-${r.longitude}`} role="listitem">
+                  <button onClick={() => selectPlace(r)} className="result-btn">
+                    {r.name}{r.admin1 ? `, ${r.admin1}` : ''}{r.country ? ` — ${r.country}` : ''}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {place && <WeatherCard place={place} weather={weather} daily={daily} />}
       </main>
 
       <footer>
-        <small>
-          <button className="linklike" onClick={()=>setShowPrivacy(true)} aria-haspopup="dialog">Politique de confidentialité</button>
-          {' — '}Besoin d'intégrations supplémentaires ? Contacte-nous.
-        </small>
-        {showPrivacy && <Privacy onClose={()=>setShowPrivacy(false)} />}
+        <small>API: Open‑Meteo — gratuit, sans clé. Code fourni à titre éducatif.</small>
       </footer>
     </div>
   );
